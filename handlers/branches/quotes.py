@@ -8,7 +8,7 @@ from utils.database.db import fetch_daily_quote, upsert_daily_quote
 from utils.chatgpt.gpt import generate_daily_quote_model
 from handlers.core.subscription import is_subscribed
 from handlers.core.start import START_TEXT, get_main_menu_kb
-from config import SUPPORT_URL
+from config import SUPPORT_URL, logger
 from utils.utils import safe_call_answer
 
 
@@ -47,6 +47,8 @@ async def quote_of_day_handler(call: CallbackQuery):
     user_id = call.from_user.id
     today = date.today().isoformat()
 
+    logger.info(f"Пользователь {user_id} запросил цитату дня за {today}")
+
     existing = await fetch_daily_quote(user_id, today)
     if existing:
         quote, source = existing
@@ -77,6 +79,7 @@ async def quote_of_day_handler(call: CallbackQuery):
         quote = data.get("quote", "").strip("` \n")
         source = data.get("source") or None
     except (json.JSONDecodeError, AttributeError, TypeError):
+        logger.error(f"Ошибка при генерации цитаты дня для {user_id}: {e}")
         kb = InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="🔄 Попробовать снова", callback_data="quote_of_day")],
             [InlineKeyboardButton(text="✉️ Написать в поддержку", url=SUPPORT_URL)],

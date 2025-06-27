@@ -18,6 +18,7 @@ from utils.utils import safe_call_answer, push_state
 from utils.payments.payment_functional import create_payment, check_payment_status
 from handlers.core.start import START_TEXT, get_main_menu_kb
 from utils.image_processing import add_watermark, add_number_overlay
+from config import logger
 
 
 router = Router()
@@ -37,6 +38,8 @@ class UserBackgroundStates(StatesGroup):
 async def purchase_backgrounds_menu(call: CallbackQuery, state: FSMContext):
     """Открывает меню покупки фонов."""
     await safe_call_answer(call)
+    user_id = call.from_user.id
+    logger.info(f"Пользователь {user_id} переключился на вкладку «Купить фон»")
     await state.clear()
     await choose_background(call, state)
 
@@ -179,29 +182,40 @@ async def select_background(call: CallbackQuery, state: FSMContext):
     await safe_call_answer(call)
     await clear_album(call, state)
 
+    data = await state.get_data()
     bg_index = int(call.data.split('_')[-1])
-    user_id = call.from_user.id
+    bg_filename = data['image_files'][bg_index]
+    src_path = os.path.join(data['image_folder'], bg_filename)
     display_index = bg_index + 1
+
+    user_id = call.from_user.id
     payment_url, payment_id = await create_payment(
         user_id,
-        50,
+        100,
         f"Покупка фона #{display_index}"
     )
     await state.update_data(paying_bg=bg_index, payment_id=payment_id)
     await push_state(state, UserBackgroundStates.browsing)
 
-    kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="💳 Оплатить фон", url=payment_url)],
-        [InlineKeyboardButton(text="📬 Получить фон", callback_data=f'backgrounds_check_{payment_id}_{bg_index}')],
-        [InlineKeyboardButton(text="⏎ Назад", callback_data='bg_go_back')]
-    ])
-    await call.message.answer(
-        text=(
-            f"💰 Фон #{display_index}\n\n"
-            "Оплатите фон — после подтверждения оплаты он сразу станет вам доступен."
-        ),
-        reply_markup=kb
-    )
+    with tempfile.TemporaryDirectory(dir=config.Output_Folder) as tmpdir:
+        wm_path = Path(tmpdir) / f"wm_preview_{bg_filename}"
+        add_watermark(src_path, str(wm_path))
+
+
+        kb = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="💳 Оплатить фон", url=payment_url)],
+            [InlineKeyboardButton(text="📬 Получить фон", callback_data=f'backgrounds_check_{payment_id}_{bg_index}')],
+            [InlineKeyboardButton(text="⏎ Назад", callback_data='bg_go_back')]
+        ])
+        await call.message.answer_photo(
+            photo=FSInputFile(str(wm_path)),
+            caption=(
+                f"👆 Фон #{display_index}\n\n"
+                "Оплатите фон — после подтверждения оплаты он сразу станет вам доступен."
+            ),
+            reply_markup=kb
+        )
+
     await state.set_state(UserBackgroundStates.waiting_payment)
 
 
@@ -219,7 +233,12 @@ async def backgrounds_check(call: CallbackQuery, state: FSMContext):
 
     status = await check_payment_status(payment_id)
     if status != "succeeded":
-        return await call.answer(text="❌ Платёж не подтверждён!", show_alert=True)
+        await call.answer(text="❌ Платёж не подтверждён!", show_alert=True)
+        logger.warning(
+            f"Платёж {payment_id} пользователя {call.from_user.id} для фона не подтвержден "
+            f"(статус={status})"
+        )
+        return
 
     await call.answer()
 
@@ -228,6 +247,9 @@ async def backgrounds_check(call: CallbackQuery, state: FSMContext):
         data['image_folder'],
         data['image_files'][int(bg_index)]
     )
+    user_id = call.from_user.id
+    display_index = int(bg_index) + 1
+
     kb = InlineKeyboardMarkup(inline_keyboard=[[
         InlineKeyboardButton(text="🏠 Главное меню", callback_data='bg_go_back_main')
     ]])
@@ -246,6 +268,12 @@ async def backgrounds_check(call: CallbackQuery, state: FSMContext):
             caption="✅ Оплата подтверждена!\n\n👆 Ваш фон.",
             reply_markup=kb
         )
+
+    logger.info(
+        f"Пользователь {user_id} успешно получил фон #{display_index} "
+        f"(payment_id={payment_id})"
+    )
+
     await push_state(state, UserBackgroundStates.post_payment)
     await state.clear()
 

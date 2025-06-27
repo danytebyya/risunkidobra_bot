@@ -11,11 +11,9 @@ def add_text_to_image(image_path, text, font_key="1", color="black", output_path
 
     font_path = font_key
 
-    font_size = 72 if image.width < 2000 else 120
+    font_size = 140 if image.width < 2000 else 160
     if size_correction: # -2 -1 / +1 +2
         font_size += (size_correction * 20)
-
-    print('current font size:', font_size)
 
     if not os.path.exists(font_path):
         font = ImageFont.load_default()

@@ -26,8 +26,9 @@ def get_main_menu_kb() -> InlineKeyboardMarkup:
 
 def get_shop_menu_kb() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="🖋️ Купить шрифт", callback_data="purchase_fonts")],
         [InlineKeyboardButton(text="🖼️ Купить фон", callback_data="purchase_backgrounds")],
+        [InlineKeyboardButton(text="🖋️ Купить шрифт", callback_data="purchase_fonts")],
+        [InlineKeyboardButton(text="✨ Купить подписку", callback_data="subscription")],
         [InlineKeyboardButton(text="⏎ Назад", callback_data="back_to_main_start")],
     ])
 

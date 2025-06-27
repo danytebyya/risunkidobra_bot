@@ -13,6 +13,7 @@ from utils.utils import safe_call_answer
 from utils.database.db import list_fonts
 from handlers.core.start import START_TEXT, get_main_menu_kb
 from utils.payments.payment_functional import create_payment, check_payment_status
+from config import logger
 
 
 router = Router()
@@ -32,6 +33,8 @@ class UserFontsStates(StatesGroup):
 async def purchase_fonts_menu(call: CallbackQuery, state: FSMContext):
     """Открывает меню покупки шрифтов."""
     await safe_call_answer(call)
+    user_id = call.from_user.id
+    logger.info(f"Пользователь {user_id} переключился на вкладку «Купить шрифт»")
     await state.clear()
     await fonts_browse(call, state)
 
@@ -133,6 +136,7 @@ async def fonts_pay(call: CallbackQuery, state: FSMContext):
     font = next((f for f in fonts if f['id'] == font_id), None)
     if not font:
         await call.message.answer("❗️ Шрифт не найден.")
+        logger.warning(f"Пользователь {user_id} попытался купить несуществующий шрифт {font_id}")
         return
 
     font_name = font['name']
@@ -170,10 +174,16 @@ async def fonts_check(call: CallbackQuery, state: FSMContext):
     """
     payload = call.data[len("fonts_check_"):]
     payment_id, font_id = payload.split("_", 1)
+    font_id = int(font_id)
+    user_id = call.from_user.id
 
     status = await check_payment_status(payment_id)
     if status != "succeeded":
         await call.answer(text="❌ Платёж не подтверждён!", show_alert=True)
+        logger.warning(
+            f"Платёж {payment_id} пользователя {user_id} для шрифта {font_id} не подтверждён "
+            f"(статус={status})"
+        )
         return
 
     fonts = await list_fonts()
@@ -196,10 +206,18 @@ async def fonts_check(call: CallbackQuery, state: FSMContext):
                 caption="✅ Оплата подтверждена!\n\n👆 Ваш шрифт.",
                 reply_markup=kb
             )
+
+            logger.info(
+                f"Пользователь {user_id} получил шрифт «{font['name']}» "
+                f"(font_id={font_id}, payment_id={payment_id})"
+            )
     else:
         await call.message.edit_caption(
             caption="❌ Шрифт не найден, обратитесь в поддержку - /help.",
             reply_markup=kb
+        )
+        logger.error(
+            f"После оплаты {payment_id} шрифт {font_id} не найден в базе для пользователя {user_id}"
         )
 
     await state.clear()

@@ -2,6 +2,7 @@ import aiosqlite
 
 from pathlib import Path
 from datetime import datetime, timezone
+from dateutil.relativedelta import relativedelta
 
 
 DB_PATH = Path(__file__).parent / "subscriptions.db"
@@ -59,8 +60,9 @@ async def init_db():
                         user_id     INTEGER NOT NULL,
                         content     TEXT NOT NULL,
                         created_at  TEXT NOT NULL,
-                        send_after  TEXT NOT NULL,    -- ISO-строка: когда слать
-                        is_sent     INTEGER NOT NULL  -- 0/1
+                        send_after  TEXT NOT NULL,
+                        is_sent     INTEGER NOT NULL,
+                        is_free     INTEGER NOT NULL  DEFAULT 0
                     )
                 """
         )
@@ -101,6 +103,8 @@ async def fetch_subscription(user_id: int):
     uid, expires_str = row
     try:
         expires = datetime.fromisoformat(expires_str)
+        if expires.tzinfo is None:
+            expires = expires.replace(tzinfo=timezone.utc)
     except ValueError:
         expires = datetime.now(timezone.utc)
 
@@ -253,19 +257,20 @@ async def delete_color(color_id: int):
     return row[0]
 
 
-async def upsert_future_letter(user_id: int, content: str, send_after: datetime):
+async def upsert_future_letter(user_id: int, content: str, send_after: datetime, *, is_free: bool = False):
     now = datetime.now(timezone.utc).isoformat()
     sa = send_after.isoformat()
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute("""
-            INSERT INTO future_letters(user_id, content, created_at, send_after, is_sent)
-            VALUES (?, ?, ?, ?, 0)
-        """, (user_id, content, now, sa))
+            INSERT INTO future_letters
+              (user_id, content, created_at, send_after, is_sent, is_free)
+            VALUES (?, ?, ?, ?, 0, ?)
+        """, (user_id, content, now, sa, int(is_free)))
         await db.commit()
 
 
-async def fetch_unsent_letters() -> list[dict]:
-    """Берём письма, которым настало время отправки."""
+async def fetch_due_letters() -> list[dict]:
+    """Берём письма, которым настало время отправки (send_after <= now)."""
     now = datetime.now(timezone.utc).isoformat()
     async with aiosqlite.connect(DB_PATH) as db:
         cur = await db.execute(
@@ -273,7 +278,8 @@ async def fetch_unsent_letters() -> list[dict]:
             SELECT id,
                    user_id,
                    content,
-                   created_at
+                   created_at,
+                   send_after
             FROM future_letters
             WHERE is_sent = 0
                 AND send_after <= ?
@@ -282,7 +288,26 @@ async def fetch_unsent_letters() -> list[dict]:
         )
         rows = await cur.fetchall()
         await cur.close()
-    return [{"id": r[0], "user_id": r[1], "content": r[2], "created_at": r[3]} for r in rows]
+    return [{"id": r[0], "user_id": r[1], "content": r[2], "created_at": r[3], "send_at": r[4],} for r in rows]
+
+
+async def fetch_all_unsent_letters() -> list[dict]:
+    """Берём все неотправленные письма (независимо от времени отправки)."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        cur = await db.execute(
+            """
+            SELECT id,
+                   user_id,
+                   content,
+                   created_at,
+                   send_after
+            FROM future_letters
+            WHERE is_sent = 0
+            """
+        )
+        rows = await cur.fetchall()
+        await cur.close()
+        return [{"id": r[0], "user_id": r[1], "content": r[2], "created_at": r[3], "send_at": r[4],} for r in rows]
 
 
 async def mark_letter_sent(letter_id: int):
@@ -292,3 +317,29 @@ async def mark_letter_sent(letter_id: int):
             (letter_id,)
         )
         await db.commit()
+
+
+async def count_free_letters_in_month(user_id: int, reference_date: datetime = None) -> int:
+    """
+    Считает, сколько бесплатных писем (is_free = TRUE) пользователь уже запланировал
+    на текущий календарный месяц.
+    """
+    now = reference_date or datetime.now(timezone.utc).isoformat()
+    first_day = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+    first_next = first_day + relativedelta(months=1)
+
+    async with aiosqlite.connect(DB_PATH) as db:
+        cur = await db.execute(
+            """
+            SELECT COUNT(*) FROM future_letters
+            WHERE user_id = ?
+              AND is_free = 1
+              AND send_after >= ?
+              AND send_after < ?
+            """,
+            (user_id, first_day.isoformat(), first_next.isoformat())
+        )
+        row = await cur.fetchone()
+        await cur.close()
+
+    return row[0] or 0

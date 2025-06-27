@@ -45,4 +45,3 @@ Image_Categories = {
     "Пожелания": "resources/images/wishes",
     "Общее": "resources/images/all"
 }
-

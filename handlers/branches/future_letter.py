@@ -12,9 +12,16 @@ from aiogram.fsm.state import State, StatesGroup
 from aiogram.exceptions import TelegramBadRequest
 
 from handlers.core.start import START_TEXT, get_main_menu_kb
+from handlers.core.subscription import is_subscribed
 from utils.utils import safe_call_answer
 from utils.payments.payment_functional import create_payment, check_payment_status
-from utils.database.db import upsert_future_letter, fetch_unsent_letters, mark_letter_sent
+from utils.database.db import (
+    upsert_future_letter,
+    fetch_due_letters,
+    fetch_all_unsent_letters,
+    mark_letter_sent,
+    count_free_letters_in_month
+)
 from utils.utils import safe_edit_text
 from config import logger, ADMIN_IDS
 
@@ -83,9 +90,7 @@ async def show_confirm_step(call_obj, draft: str, state: FSMContext, is_callback
 # Оплата письма
 # ——————————————————————
 async def show_payment_step(call: CallbackQuery, interval: str, state: FSMContext):
-    """
-    Предлагает пользователю оплатить письмо.
-    """
+    """Предлагает пользователю оплатить письмо."""
     url, pid = await create_payment(call.from_user.id, 100, 'Письмо в будущее')
     await state.update_data(pid=pid)
     kb = InlineKeyboardMarkup(inline_keyboard=[
@@ -108,6 +113,8 @@ async def show_payment_step(call: CallbackQuery, interval: str, state: FSMContex
 @router.callback_query(F.data == 'future_letter')
 async def future_letter_start(call: CallbackQuery, state: FSMContext):
     """Обрабатывает нажатие кнопки «Письмо в будущее» и запускает ввод письма."""
+    user_id = call.from_user.id
+    logger.info(f"Пользователь {user_id} переключился на вкладку «Письмо в будущее»")
     await show_input_step(call, state)
     await safe_call_answer(call)
 
@@ -124,7 +131,7 @@ async def input_future_letter(message: Message, state: FSMContext):
         try:
             await message.delete()
         except TelegramBadRequest:
-            logger.debug('Не удалось удалить неверный контент')
+            pass
         await message.bot.edit_message_text(
             chat_id=message.chat.id,
             message_id=bot_msg_id,
@@ -140,7 +147,7 @@ async def input_future_letter(message: Message, state: FSMContext):
     try:
         await message.delete()
     except TelegramBadRequest:
-        logger.debug('Не удалось удалить сообщение пользователя')
+        pass
     await show_confirm_step(message, draft, state, is_callback=False)
     await state.set_state(FutureLetterStates.confirm_interval)
 
@@ -151,26 +158,43 @@ async def input_future_letter(message: Message, state: FSMContext):
 @router.callback_query(F.data.in_({'in_month', 'in_year'}))
 async def choose_interval(call: CallbackQuery, state: FSMContext):
     """Сохраняет интервал отправки и запускает оплату. Также планирует задачу отправки письма через APScheduler."""
+    user_id = call.from_user.id
     data = await state.get_data()
     draft = data['user_text']
     now = datetime.now(timezone.utc)
     delay_days = 30 if call.data == 'in_month' else 365
     send_at = now + timedelta(days=delay_days)
-    await state.update_data(send_at=send_at.isoformat())
 
+    if await is_subscribed(user_id):
+        used = await count_free_letters_in_month(user_id, send_at)
+        if used < 1:
+            await upsert_future_letter(user_id, draft, send_at, is_free=True)
+            scheduler.add_job(
+                call.bot.send_message,
+                trigger='date',
+                run_date=send_at,
+                args=[
+                    user_id,
+                    f"📨 Ваше письмо из прошлого:\n\n{draft}"
+                ]
+            )
+            formatted_date = send_at.strftime("%d.%m.%Y")
+            await safe_call_answer(call)
+            await call.message.edit_text(
+                text=(
+                    f"✅ Отлично! Как подписчик, вы получили бесплатную отправку.\n"
+                    f"Ваше письмо запланировано на {formatted_date} в 12:00 UTC."
+                ),
+                reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                    [InlineKeyboardButton(text='🏠 Вернуться в главное меню', callback_data='go_back_to_menu')]
+                ])
+            )
+            await state.clear()
+            return
+
+    await state.update_data(send_at=send_at.isoformat())
     interval = 'месяц' if call.data == 'in_month' else 'год'
     await show_payment_step(call, interval, state)
-
-    scheduler.add_job(
-        lambda: asyncio.create_task(
-            call.bot.send_message(
-                chat_id=call.from_user.id,
-                text=f"📨 Ваше письмо из прошлого:\n\n{draft}"
-            )
-        ),
-        trigger='date',
-        run_date=send_at
-    )
 
 
 # ——————————————————————
@@ -180,12 +204,33 @@ async def choose_interval(call: CallbackQuery, state: FSMContext):
 async def check_future_letter(call: CallbackQuery, state: FSMContext):
     data = await state.get_data()
     pid = data.get('pid')
+    status = await check_payment_status(pid)
+    user_id = call.from_user.id
+
     if not pid or await check_payment_status(pid) != 'succeeded':
-        return await call.answer(text='❌ Платёж не подтверждён', show_alert=True)
+        await call.answer(text='❌ Платёж не подтверждён', show_alert=True)
+        logger.warning(
+            f"Платёж {pid} пользователя {user_id} для письма в будущее не подтверждён "
+            f"(статус={status})"
+        )
+        return
+    logger.info(f"Пользователь {user_id} успешно оплатил и отправил письмо в будущее (payment_id={pid})")
+
     draft = data['user_text']
     send_at = datetime.fromisoformat(data['send_at'])
-    formatted_date = send_at.strftime("%d.%m.%Y")
     await upsert_future_letter(call.from_user.id, draft, send_at)
+
+    scheduler.add_job(
+        call.bot.send_message,
+        trigger='date',
+        run_date=send_at,
+        args=[
+            call.from_user.id,
+            f"📨 Ваше письмо из прошлого:\n\n{draft}"
+        ]
+    )
+
+    formatted_date = send_at.strftime("%d.%m.%Y")
     await safe_call_answer(call)
     await call.message.edit_text(
         text= f"✅ Отлично! Ваше письмо запланировано на "
@@ -238,7 +283,7 @@ async def deliver_future_letters(bot: Bot):
     Периодически проверяет БД на неотправленные письма
     и отправляет их пользователям.
     """
-    letters = await fetch_unsent_letters()
+    letters = await fetch_due_letters()
     for l in letters:
         for attempt in (1, 2):
             try:
@@ -255,9 +300,6 @@ async def deliver_future_letters(bot: Bot):
                 break
             except TelegramBadRequest as e:
                 if attempt == 1:
-                    logger.warning(
-                        f"TelegramBadRequest при отправке письма id={l['id']}, попытка 2 через 5 секунд..."
-                    )
                     await asyncio.sleep(5)
                 else:
                     logger.exception(f"Не удалось отправить письмо id={l['id']} после 2 попыток", exc_info=e)
@@ -281,30 +323,44 @@ async def reschedule_pending(bot: Bot):
     При старте приложения вновь планирует все письма,
     которые ещё не были отправлены.
     """
-    pending = await fetch_unsent_letters()
+    pending = await fetch_all_unsent_letters()
+    now = datetime.now(timezone.utc)
     for l in pending:
-        run_dt = l['send_at']
+        raw_send = l.get('send_at')
+        if not raw_send:
+            logger.warning(f"reschedule_pending: письмо id={l.get('id')} без send_at, пропускаем"
+                           f"текст письма: \"{l.get('content', '').replace(chr(10), ' ')}\""
+                           )
+            continue
+        run_dt = (datetime.fromisoformat(raw_send)
+                  if isinstance(raw_send, str) else raw_send)
         if run_dt.tzinfo is None:
             run_dt = run_dt.replace(tzinfo=timezone.utc)
+
+        if run_dt <= now:
+            created_raw = l.get('created_at')
+            created_at = (datetime.fromisoformat(created_raw)
+                            if isinstance(created_raw, str) else created_raw)
+            if created_at.tzinfo is None:
+                created_at = created_at.replace(tzinfo=timezone.utc)
+            ts = created_at.strftime("%d.%m.%Y %H:%M")
+            text = f"📨 Ваше письмо, составленное {ts}:\n\n{l['content']}"
+            try:
+                await bot.send_message(l['user_id'], text)
+                await mark_letter_sent(l['id'])
+            except TelegramBadRequest as e:
+                logger.exception(f"Ошибка при немедленной отправке письма id={l['id']}", exc_info=e)
+            continue
+
         content = l['content']
-        created_at = l.get('created_at')
-        if isinstance(created_at, str):
-            created_at = datetime.fromisoformat(created_at)
-        if created_at.tzinfo is None:
-            created_at = created_at.replace(tzinfo=timezone.utc)
-        created_ts = created_at.strftime("%d.%m.%Y %H:%M")
         scheduler.add_job(
-            lambda user_id=l['user_id'], text=content, ts=created_ts: asyncio.create_task(
-                bot.send_message(
-                    chat_id=user_id,
-                    text=(
-                        f"📨 Ваше письмо, составленное {ts}:\n\n"
-                        f"{text}"
-                    )
-                )
-            ),
+            bot.send_message,
             trigger='date',
-            run_date=run_dt
+            run_date=run_dt,
+            args=[
+                l['user_id'],
+                f"📨 Ваше письмо, из прошлого:\n\n{content}"
+            ]
         )
 
 
@@ -314,9 +370,15 @@ def setup_future_letter_scheduler(bot: Bot):
     - ежедневная проверка unsent писем в 12:00 UTC
     - планирование уже имеющихся писем.
     """
-    scheduler.add_job(lambda: asyncio.create_task(deliver_future_letters(bot)), 'cron', hour=12, minute=0)
+    scheduler.add_job(
+        deliver_future_letters,
+        'cron',
+        hour=12,
+        minute=0,
+        args=[bot]
+    )
     scheduler.start()
-    asyncio.create_task(reschedule_pending(bot))
+    asyncio.get_event_loop().create_task(reschedule_pending(bot))
 
 
 # ——————————————————————

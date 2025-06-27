@@ -7,6 +7,7 @@ from aiogram.filters import Command
 from utils.database.db import upsert_subscription, fetch_subscription
 from utils.payments.payment_functional import create_payment, check_payment_status
 from handlers.core.start import START_TEXT, get_main_menu_kb
+from config import logger
 
 
 router = Router()
@@ -24,6 +25,7 @@ async def activate_subscription(user_id: int, days: int) -> datetime:
         base = now
     expires = base + timedelta(days=days)
     await upsert_subscription(user_id, expires.isoformat())
+    logger.info(f"Подписка пользователя {user_id} активирована на {days} дн. до {expires.isoformat()}")
     return expires
 
 
@@ -32,7 +34,8 @@ async def is_subscribed(user_id: int) -> bool:
     Проверяет наличие активной подписки.
     """
     record = await fetch_subscription(user_id)
-    return bool(record and record['expires_at'] > datetime.utcnow())
+    active = bool(record and record['expires_at'] > datetime.utcnow())
+    return active
 
 
 @router.message(Command(commands=["subscribe", "subscription"]))
@@ -41,6 +44,7 @@ async def show_subscription_menu(message: Message):
     Показывает пользователю информацию о подписке или дату её окончания.
     """
     user_id = message.from_user.id
+    logger.info(f"Пользователь {user_id} открыл меню подписки")
 
     if await is_subscribed(user_id):
         record = await fetch_subscription(user_id)
@@ -56,9 +60,10 @@ async def show_subscription_menu(message: Message):
         return
 
     text = (
-        "Подписка Добрые открыточки+ 🫶\n\n"
+        "✨ Подписка «Добрые открыточки+»\n\n"
         "- Бесплатная генерация открыток\n"
         "- Бесплатная генерация поздравлений\n"
+        "- Ежемесячно — одно бесплатное письмо в будущее \n"
         "- Доступ к «Цитате дня»\n\n"
         "Стоимость: 500₽/мес"
     )
@@ -92,9 +97,10 @@ async def subscription_callback(call: CallbackQuery):
         )
     else:
         text = (
-            "Подписка Добрые открыточки+ 🫶\n\n"
+            "✨ Подписка Добрые открыточки+\n\n"
             "- Бесплатная генерация открыток\n"
             "- Бесплатная генерация поздравлений\n"
+            "- Одно бесплатное письмо в будущее (раз в месяц)\n"
             "- Доступ к «Цитате дня»\n\n"
             "Стоимость: 500₽/мес"
         )
@@ -134,6 +140,7 @@ async def check_callback(call: CallbackQuery):
     Проверяет статус платежа и, при успехе, редактирует сообщение:
     убирает кнопки и выводит подтверждение оплаты.
     """
+    user_id = call.from_user.id
     _, payment_id, days_str = call.data.split(':')
     days = int(days_str)
     status = await check_payment_status(payment_id)
@@ -141,6 +148,7 @@ async def check_callback(call: CallbackQuery):
     if status == 'succeeded':
         expires = await activate_subscription(call.from_user.id, days)
         formatted = expires.strftime("%d.%m.%Y")
+        logger.info(f"Платёж {payment_id} пользователя {user_id} успешно завершён, подписка до {formatted}")
         kb = InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="🏠 Вернуться в главное меню", callback_data="main_menu_sub")]
         ])
@@ -149,6 +157,7 @@ async def check_callback(call: CallbackQuery):
             reply_markup=kb
         )
     else:
+        logger.warning(f"Платёж {payment_id} пользователя {user_id} не подтверждён (статус={status})")
         await call.answer(
             f"❌ Оплата не подтверждена. Текущий статус: {status}.",
             show_alert=True

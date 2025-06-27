@@ -2,12 +2,12 @@ from yookassa import Configuration, Payment
 import uuid
 import config
 
-Configuration.account_id = "1025133"
-Configuration.secret_key = config.PAYMENT_SECRET_KEY
+# Configuration.account_id = "1025133"
+# Configuration.secret_key = config.PAYMENT_SECRET_KEY
 
 
-#Configuration.account_id = "1029197"
-#Configuration.secret_key = config.PAYMENT_SECRET_KEY_LIVE
+Configuration.account_id = "1029197"
+Configuration.secret_key = config.PAYMENT_SECRET_KEY_LIVE
 
 
 async def create_payment(user_id, value, description: str = "Оплата за открытку без водяного знака"):

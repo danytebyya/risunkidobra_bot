@@ -1,4 +1,5 @@
 from aiogram import Router, F, types, Dispatcher
+from aiogram.exceptions import TelegramBadRequest
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
@@ -26,6 +27,8 @@ class CongratsStates(StatesGroup):
 async def congrats_start(call: CallbackQuery, state: FSMContext):
     """Отображает меню выбора темы поздравления."""
     await state.clear()
+    user_id = call.from_user.id
+    logger.info(f"Пользователь {user_id} переключился на вкладку «Теплое поздравление»")
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="Дружба",    callback_data="congrats_type_friendship")],
         [InlineKeyboardButton(text="Любовь",    callback_data="congrats_type_love")],
@@ -157,9 +160,16 @@ async def check_congrats_payment(call: CallbackQuery, state: FSMContext):
     """
     pid = call.data.split(":", 1)[1]
     status = await check_payment_status(pid)
+    user_id = call.from_user.id
+
     if status != "succeeded":
         await call.answer(text="❌ Платёж не подтверждён", show_alert=True)
+        logger.warning(
+            f"Платёж {pid} пользователя {user_id} для поздравления не подтверждён "
+            f"(статус={status})"
+        )
         return
+    logger.info(f"Пользователь {user_id} получил поздравление (payment_id={pid})")
 
     await call.answer()
     chat_id = call.message.chat.id
@@ -172,8 +182,11 @@ async def check_congrats_payment(call: CallbackQuery, state: FSMContext):
 
     try:
         text = await generate_response(data["category_ru"], data["user_prompt"])
-    except Exception as e:
-        logger.error(f"Error in generate_response: {e}")
+    except TelegramBadRequest:
+        logger.error(
+            f"Ошибка генерации поздравления после оплаты для {call.from_user.id} "
+            f"(payment_id={pid})"
+        )
         kb_err = InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="Попробовать снова", callback_data="regenerate_congrats")],
             [InlineKeyboardButton(text="Написать в поддержку",   url=SUPPORT_URL)],
@@ -231,8 +244,7 @@ async def regenerate_congratulation(call: CallbackQuery, state: FSMContext):
                 category,
                 base_prompt
             )
-    except Exception as e:
-        logger.error(f"Error in regenerate_response: {e}")
+    except TelegramBadRequest:
         kb_err = InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="🔄 Попробовать снова", callback_data="regenerate_congrats")],
             [InlineKeyboardButton(text="✉️ Написать в поддержку", url=SUPPORT_URL)],
