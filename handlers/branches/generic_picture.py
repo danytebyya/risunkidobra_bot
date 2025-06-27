@@ -469,12 +469,11 @@ async def select_position(call: CallbackQuery, state: FSMContext):
     """Сохраняет выбранную позицию текста и переводит пользователя к вводу текста"""
     pos = call.data.split('_')[-1]
     await state.update_data(selected_text_position=pos)
-    await update_summary(call, state)
     try:
-        await call.message.delete()
+        await call.bot.delete_message(call.message.chat.id, call.message.message_id)
     except TelegramBadRequest:
         pass
-
+    await update_summary(call, state)
     prompt = await call.message.answer('📝 Напишите текст, используя кириллицу:')
     await state.update_data(text_prompt_msg_id=prompt.message_id)
     await state.set_state(ImageMaker.entering_text)

@@ -1,4 +1,4 @@
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from aiogram import F, Dispatcher
 from aiogram.types import Message, CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup
 from aiogram import Router
@@ -17,7 +17,7 @@ async def activate_subscription(user_id: int, days: int) -> datetime:
     """
     Активирует или продлевает подписку на days дней.
     """
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc)
     record = await fetch_subscription(user_id)
     if record and record['expires_at'] > now:
         base = record['expires_at']
@@ -34,7 +34,8 @@ async def is_subscribed(user_id: int) -> bool:
     Проверяет наличие активной подписки.
     """
     record = await fetch_subscription(user_id)
-    active = bool(record and record['expires_at'] > datetime.utcnow())
+    now_utc = datetime.now(timezone.utc)
+    active = bool(record and record['expires_at'] > now_utc)
     return active
 
 
