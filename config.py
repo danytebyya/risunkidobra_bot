@@ -2,28 +2,23 @@ import os
 
 from sys import stdout
 from loguru import logger
-from dotenv import load_dotenv
 from aiogram import Bot, Dispatcher
 from aiogram.fsm.storage.memory import MemoryStorage
 
-
-load_dotenv()
-
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 TOKEN = os.getenv("TELEGRAM_TOKEN")
-PAYMENT_SECRET_KEY = os.getenv("PAYMENT_SECRET_KEY")
+# PAYMENT_SECRET_KEY = os.getenv("PAYMENT_SECRET_KEY")
 PAYMENT_SECRET_KEY_LIVE = os.getenv("PAYMENT_SECRET_KEY_LIVE", None)
-HTTP_PROXY = os.getenv("HTTP_PROXY")
-
-WEBHOOK_BASE = os.getenv("WEBHOOK_BASE")
-WEBHOOK_PATH = f"/{TOKEN}"
-WEBHOOK_URL = f"{WEBHOOK_BASE}{WEBHOOK_PATH}"
-PORT = int(os.getenv("PORT", 8000))
+# HTTP_PROXY = os.getenv("HTTP_PROXY", None)
+DATABASE_URL = os.getenv("DATABASE_URL")
+APP_KEY = os.getenv('DROPBOX_APP_KEY')
+APP_SECRET = os.getenv('DROPBOX_APP_SECRET')
+REFRESH_TOKEN = os.getenv('DROPBOX_REFRESH_TOKEN')
 
 required = {
     "TELEGRAM_TOKEN": TOKEN,
     "OPENAI_API_KEY": OPENAI_API_KEY,
-    "PAYMENT_SECRET_KEY": PAYMENT_SECRET_KEY,
+    "PAYMENT_SECRET_KEY_LIVE": PAYMENT_SECRET_KEY_LIVE,
 }
 missing = [name for name, val in required.items() if not val]
 if missing:
@@ -32,7 +27,6 @@ if missing:
 logger.remove()
 logger.add(stdout, level="DEBUG", enqueue=True)
 
-bot = Bot(token=TOKEN)
 storage = MemoryStorage()
 dp = Dispatcher(storage=storage)
 
@@ -42,11 +36,3 @@ SUPPORT_URL = "tg://resolve?domain=ourlifeiswhatourthoughtsmakeit"
 
 Font_Folder = "resources/fonts/"
 Output_Folder = "resources/output/"
-
-Image_Categories = {
-    "Для него": "resources/images/for_him",
-    "Для неё": "resources/images/for_her",
-    "День рождения": "resources/images/birthday",
-    "Пожелания": "resources/images/wishes",
-    "Общее": "resources/images/all"
-}

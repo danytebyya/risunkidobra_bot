@@ -5,5 +5,5 @@ from .admin_branches import register_handlers as _register_admin_branches
 
 def register_all(dp):
     _register_core(dp)
-    _register_branches(dp)
     _register_admin_branches(dp)
+    _register_branches(dp)

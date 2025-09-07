@@ -14,7 +14,7 @@ from pathlib import Path
 
 import config
 
-from utils.utils import safe_call_answer, push_state
+from utils.utils import push_state, safe_answer_callback
 from utils.payments.payment_functional import create_payment, check_payment_status
 from handlers.core.start import START_TEXT, get_main_menu_kb
 from utils.image_processing import add_watermark, add_number_overlay
@@ -37,7 +37,7 @@ class UserBackgroundStates(StatesGroup):
 @router.callback_query(F.data == "purchase_backgrounds")
 async def purchase_backgrounds_menu(call: CallbackQuery, state: FSMContext):
     """Открывает меню покупки фонов."""
-    await safe_call_answer(call)
+    await safe_answer_callback(call, state)
     user_id = call.from_user.id
     logger.info(f"Пользователь {user_id} переключился на вкладку «Купить фон»")
     await state.clear()
@@ -50,7 +50,7 @@ async def purchase_backgrounds_menu(call: CallbackQuery, state: FSMContext):
 @router.callback_query(UserBackgroundStates.menu, F.data == "backgrounds_browse")
 async def choose_background(call: CallbackQuery, state: FSMContext):
     """Показывает список доступных фонов постранично. Сохраняет список файлов и папку в state."""
-    await safe_call_answer(call)
+    await safe_answer_callback(call, state)
     await push_state(state, UserBackgroundStates.menu)
 
     files = sorted(
@@ -78,7 +78,7 @@ async def show_backgrounds_album(call: CallbackQuery, state: FSMContext, loading
     Отображает альбом фоновых изображений на указанной странице.
     Добавляет водяной знак и нумерацию к каждому изображению.
     """
-    await safe_call_answer(call)
+    await safe_answer_callback(call, state)
     data = await state.get_data()
 
     files = data['image_files']
@@ -156,7 +156,7 @@ async def clear_album(call: CallbackQuery, state: FSMContext):
 @router.callback_query(F.data.startswith('next_bg_'))
 async def next_bg_page(call: CallbackQuery, state: FSMContext):
     """Переходит на следующую страницу альбома фоновых изображений."""
-    await safe_call_answer(call)
+    await safe_answer_callback(call, state)
     await clear_album(call, state)
     loading = await call.message.answer("⚙️ Загружаем фоны…")
     await show_backgrounds_album(call, state, loading, page=int(call.data.split('_')[-1]))
@@ -166,7 +166,7 @@ async def next_bg_page(call: CallbackQuery, state: FSMContext):
 @router.callback_query(F.data.startswith('prev_bg_'))
 async def prev_bg_page(call: CallbackQuery, state: FSMContext):
     """Переходит на предыдущую страницу альбома фоновых изображений."""
-    await safe_call_answer(call)
+    await safe_answer_callback(call, state)
     await clear_album(call, state)
     loading = await call.message.answer("⚙️ Загружаем фоны…")
     await show_backgrounds_album(call, state, loading, page=int(call.data.split('_')[-1]))
@@ -179,7 +179,7 @@ async def prev_bg_page(call: CallbackQuery, state: FSMContext):
 @router.callback_query(UserBackgroundStates.browsing, F.data.startswith('select_bg_'))
 async def select_background(call: CallbackQuery, state: FSMContext):
     """Инициирует платёж за выбранный фон. Генерирует ссылку на оплату и предлагает подтвердить."""
-    await safe_call_answer(call)
+    await safe_answer_callback(call, state)
     await clear_album(call, state)
 
     data = await state.get_data()
@@ -240,7 +240,7 @@ async def backgrounds_check(call: CallbackQuery, state: FSMContext):
         )
         return
 
-    await call.answer()
+    await safe_answer_callback(call, state)
 
     data = await state.get_data()
     bg_file = os.path.join(
@@ -287,7 +287,7 @@ async def bg_go_back(call: CallbackQuery, state: FSMContext):
     Обрабатывает «Назад» в любом состоянии FSM:
     возвращает к списку фонов или в главное меню.
     """
-    await safe_call_answer(call)
+    await safe_answer_callback(call, state)
     current = await state.get_state()
     data = await state.get_data()
 
@@ -325,7 +325,7 @@ async def bg_go_back_main(call: CallbackQuery, state: FSMContext):
     Возвращает пользователя в главное меню из пост-оплаты.
     Очищает клавиатуру текущего сообщения.
     """
-    await safe_call_answer(call)
+    await safe_answer_callback(call, state)
     try:
         await call.message.edit_reply_markup(reply_markup=None)
     except TelegramBadRequest:

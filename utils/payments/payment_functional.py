@@ -44,9 +44,22 @@ async def create_payment(user_id, value, description: str = "Оплата за �
         }
     }, idempotence_key)
 
-    print("link:", payment.confirmation.confirmation_url)
+    confirmation_url = None
+    payment_id = None
+    if payment is not None:
+        confirmation = getattr(payment, 'confirmation', None)
+        if confirmation is not None:
+            confirmation_url = getattr(confirmation, 'confirmation_url', None)
+        if hasattr(payment, 'id'):
+            payment_id = payment.id
+        # Альтернативно, если payment поддерживает []
+        if not confirmation_url and isinstance(payment, dict):
+            confirmation_url = payment.get('confirmation', {}).get('confirmation_url')
+            payment_id = payment.get('id')
+
+    print("link:", confirmation_url)
     # Возвращаем URL для подтверждения платежа
-    return payment['confirmation']['confirmation_url'], payment.id
+    return confirmation_url, payment_id
 
 
 async def check_payment_status(payment_id):

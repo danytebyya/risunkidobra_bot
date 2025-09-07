@@ -9,7 +9,7 @@ from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import InputMediaPhoto
 
-from utils.utils import safe_call_answer
+from utils.utils import safe_answer_callback
 from utils.database.db import list_fonts
 from handlers.core.start import START_TEXT, get_main_menu_kb
 from utils.payments.payment_functional import create_payment, check_payment_status
@@ -32,7 +32,7 @@ class UserFontsStates(StatesGroup):
 @router.callback_query(F.data == "purchase_fonts")
 async def purchase_fonts_menu(call: CallbackQuery, state: FSMContext):
     """Открывает меню покупки шрифтов."""
-    await safe_call_answer(call)
+    await safe_answer_callback(call, state)
     user_id = call.from_user.id
     logger.info(f"Пользователь {user_id} переключился на вкладку «Купить шрифт»")
     await state.clear()
@@ -48,7 +48,7 @@ async def fonts_browse(call: CallbackQuery, state: FSMContext):
     Загружает список доступных шрифтов и показывает первый превью.
     Сохраняет список в state.
     """
-    await safe_call_answer(call)
+    await safe_answer_callback(call, state)
     loading = await call.message.answer("⚙️ Загружаем шрифты…")
     fonts = await list_fonts()
     if not fonts:
@@ -123,7 +123,7 @@ async def fonts_pay(call: CallbackQuery, state: FSMContext):
     Инициирует платёж за выбранный шрифт.
     Отправляет ссылку на оплату и кнопку для проверки.
     """
-    await safe_call_answer(call)
+    await safe_answer_callback(call, state)
     try:
         await call.message.delete()
     except TelegramBadRequest:
@@ -153,13 +153,19 @@ async def fonts_pay(call: CallbackQuery, state: FSMContext):
         [InlineKeyboardButton(text="📬 Получить шрифт", callback_data=f"fonts_check_{payment_id}_{font_id}")],
         [InlineKeyboardButton(text="⏎ Назад", callback_data="go_back_user_font")],
     ])
-    await call.message.answer(
-        text=(
-            f"💰 Шрифт #{font_name}\n\n"
-            "Оплатите шрифт — после подтверждения оплаты он сразу станет вам доступен."
-        ),
-        reply_markup=kb
-    )
+
+    # Показываем фото выбранного шрифта перед кнопками оплаты
+    try:
+        await call.message.answer_photo(
+            photo=FSInputFile(font['sample_path']),
+            caption=f"Вы выбрали шрифт: {font_name}",
+            reply_markup=kb
+        )
+    except TelegramBadRequest:
+        await call.message.answer(
+            text=f"Вы выбрали шрифт: {font_name}",
+            reply_markup=kb
+        )
     await state.set_state(UserFontsStates.waiting_payment)
 
 
@@ -229,7 +235,7 @@ async def fonts_check(call: CallbackQuery, state: FSMContext):
 @router.callback_query(F.data == 'go_back_user_font')
 async def go_back_fonts(call: CallbackQuery, state: FSMContext):
     """Возвращает пользователя на предыдущий шаг при работе со шрифтами или в главное меню."""
-    await safe_call_answer(call)
+    await safe_answer_callback(call, state)
     current = await state.get_state()
 
     if current in {UserFontsStates.browsing.state, UserFontsStates.menu.state}:
@@ -269,7 +275,7 @@ async def user_back_to_main(call: CallbackQuery, state: FSMContext):
     Возвращает пользователя в главное меню после покупки.
     Очищает текущее состояние и клавиатуру.
     """
-    await safe_call_answer(call)
+    await safe_answer_callback(call, state)
     await state.clear()
     try:
         await call.message.edit_reply_markup(reply_markup=None)

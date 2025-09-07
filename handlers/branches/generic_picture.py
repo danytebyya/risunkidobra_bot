@@ -16,7 +16,7 @@ from config import logger
 from utils.database.db import list_fonts, list_colors
 from utils.image_processing import add_watermark, add_text_to_image, add_number_overlay
 from utils.payments.payment_functional import create_payment, check_payment_status
-from utils.utils import safe_edit_text, safe_edit_media, push_state, validate_text, safe_call_answer
+from utils.utils import safe_edit_text, safe_edit_media, push_state, validate_text, safe_answer_callback
 from handlers.core.start import START_TEXT, get_main_menu_kb
 from handlers.core.subscription import is_subscribed
 
@@ -39,7 +39,8 @@ async def update_summary(call: CallbackQuery, state: FSMContext):
     # Удаляем прошлые summary-сообщения
     for msg_id in data.get('summary_msgs', []):
         try:
-            await call.bot.delete_message(call.message.chat.id, msg_id)
+            if call.message and call.message.chat and call.bot:
+                await call.bot.delete_message(call.message.chat.id, msg_id)
         except TelegramBadRequest:
             pass
 
@@ -74,9 +75,11 @@ async def update_summary(call: CallbackQuery, state: FSMContext):
     if data.get('selected_font_sample'):
         media.append(InputMediaPhoto(media=FSInputFile(data['selected_font_sample'])))
 
-    msgs = await call.message.answer_media_group(media=media)
-    summary_ids = [m.message_id for m in msgs]
-    await state.update_data(summary_msgs=summary_ids)
+    if call.message:
+        from typing import Sequence
+        msgs = await call.message.answer_media_group(media=media)  # type: ignore
+        summary_ids = [m.message_id for m in msgs]
+        await state.update_data(summary_msgs=summary_ids)
 
 
 # ——————————————————————
@@ -84,10 +87,26 @@ async def update_summary(call: CallbackQuery, state: FSMContext):
 # ——————————————————————
 @router.callback_query(F.data == 'create_card')
 async def create_card(call: CallbackQuery, state: FSMContext, force_new_message: bool = False):
-    """Инициализирует создание новой открытки и предлагает выбрать категорию"""
+    """Инициализирует создание новой открытки и сразу переходит к выбору изображения"""
     await state.clear()
     user_id = call.from_user.id
     logger.info(f"Пользователь {user_id} переключился на вкладку «Персональная открытка»")
+    
+    # Проверяем доступность сервиса
+    from utils.service_checker import check_service_availability
+    is_available, maintenance_message, keyboard = await check_service_availability("create_card")
+    
+    if not is_available:
+        if call.message and hasattr(call.message, "message_id") and call.bot is not None:
+            await call.bot.edit_message_text(
+                text=maintenance_message or "Сервис временно недоступен. Приносим извинения за неудобства.",
+                chat_id=call.message.chat.id,
+                message_id=call.message.message_id,
+                reply_markup=keyboard
+            )
+        await safe_answer_callback(call, state)
+        return
+    
     await state.update_data(state_stack=[])
 
     text = (
@@ -95,40 +114,38 @@ async def create_card(call: CallbackQuery, state: FSMContext, force_new_message:
         '♡ Выберите изображение по душе, которое задаст настроение вашей открытке\n'
         '✎ Напишите тёплое личное послание в изысканном шрифте, отражающем ваши чувства\n'
         '✓ Завершите оформление: оплатите заказ и мгновенно получите своё уникальное творение\n\n'
-        'Готовы вдохновлять близких?\n\n'
-        '👇 Начнём с выбора категории изображения:'
+        '💌 Готовы вдохновлять близких?\n\n'
     )
 
-    await push_state(state, ImageMaker.choosing_category)
+    # Создаем клавиатуру с кнопкой выбора картинки и возврата в главное меню
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text=name, callback_data=f'category_{name}')] for name in config.Image_Categories
-    ] + [[InlineKeyboardButton(text="🏠 Вернуться в главное меню", callback_data="go_back")]])
+        [InlineKeyboardButton(text="🖼️ Выбрать картинку", callback_data="choose_image_direct")],
+        [InlineKeyboardButton(text="🏠 Вернуться в главное меню", callback_data="go_back")]
+    ])
 
-    if force_new_message:
+    if force_new_message and call.message:
         await call.message.answer(text, reply_markup=keyboard)
     else:
         await safe_edit_text(call.message, text=text, reply_markup=keyboard)
 
-    await call.answer()
+    await safe_answer_callback(call, state)
 
 
 # ——————————————————————
-# Выбор категории изображения
+# Прямой выбор изображения (без категорий)
 # ——————————————————————
-@router.callback_query(F.data.startswith('category_'))
-async def process_category(call: CallbackQuery, state: FSMContext):
-    """Сохраняет выбранную категорию и переходит к выбору изображения"""
-    category = call.data.split(sep='_', maxsplit=1)[1]
-    if category not in config.Image_Categories:
-        await call.answer(text='❌ Категория не найдена', show_alert=True)
-        return
-    await safe_call_answer(call)
-    await state.update_data(selected_category=category)
+@router.callback_query(F.data == 'choose_image_direct')
+async def choose_image_direct(call: CallbackQuery, state: FSMContext):
+    """Переходит к выбору изображения напрямую из папки resources/images"""
+    await safe_answer_callback(call, state)
+    await state.update_data(selected_category="all", image_folder="resources/images")
 
-    try:
-        await call.message.delete()
-    except TelegramBadRequest:
-        pass
+    if call.message:
+        try:
+            if isinstance(call.message, Message):
+                await call.message.delete()
+        except TelegramBadRequest:
+            pass
 
     await choose_image(call, state)
 
@@ -137,10 +154,12 @@ async def process_category(call: CallbackQuery, state: FSMContext):
 # Выбор изображения
 # ——————————————————————
 async def choose_image(call: CallbackQuery, state: FSMContext):
-    """Загружает список файлов изображений и инициирует показ первого изображения"""
+    """Загружает список файлов изображений и иниирует показ первого изображения"""
     await push_state(state, ImageMaker.choosing_image)
     data = await state.get_data()
-    folder = config.Image_Categories[data['selected_category']]
+    
+    # Используем папку resources/images напрямую
+    folder = data.get('image_folder', 'resources/images')
     files = sorted(f for f in os.listdir(folder) if f.lower().endswith(('.jpg', '.png')))
     await state.update_data(image_files=files, image_folder=folder)
     await show_images_album(call, state, page=0)
@@ -148,7 +167,7 @@ async def choose_image(call: CallbackQuery, state: FSMContext):
 
 async def show_images_album(call: CallbackQuery, state: FSMContext, page: int = 0):
     """Отображает изображения постранично с водяными знаками и нумерацией."""
-    await safe_call_answer(call)
+    await safe_answer_callback(call, state)
 
     user_id = call.from_user.id
 
@@ -157,15 +176,20 @@ async def show_images_album(call: CallbackQuery, state: FSMContext, page: int = 
     keyboard_msg_id = data.get('last_keyboard_msg_id')
     for msg_id in old_album_msgs:
         try:
-            await call.bot.delete_message(call.message.chat.id, msg_id)
+            if call.message and call.message.chat and call.bot:
+                await call.bot.delete_message(call.message.chat.id, msg_id)
         except TelegramBadRequest:
             pass
     if keyboard_msg_id:
         try:
-            await call.bot.delete_message(call.message.chat.id, keyboard_msg_id)
+            if call.message and call.message.chat and call.bot:
+                await call.bot.delete_message(call.message.chat.id, keyboard_msg_id)
         except TelegramBadRequest:
             pass
 
+    if not call.message:
+        return
+        
     loading_msg = await call.message.answer("⚙️ Загружаем картинки...")
     files = data['image_files']
     total = len(files)
@@ -233,20 +257,27 @@ async def show_images_album(call: CallbackQuery, state: FSMContext, page: int = 
 
 @router.callback_query(F.data.startswith('next_page_'))
 async def next_page_cb(call: CallbackQuery, state: FSMContext):
-    page = int(call.data.split('_')[-1])
-    await show_images_album(call, state, page)
+    if call.data:
+        page = int(call.data.split('_')[-1])
+        await show_images_album(call, state, page)
 
 
 @router.callback_query(F.data.startswith('prev_page_'))
 async def prev_page_cb(call: CallbackQuery, state: FSMContext):
-    page = int(call.data.split('_')[-1])
-    await show_images_album(call, state, page)
+    if call.data:
+        page = int(call.data.split('_')[-1])
+        await show_images_album(call, state, page)
+
+
+
 
 
 @router.callback_query(F.data.startswith('select_image_'))
 async def select_image_cb(call: CallbackQuery, state: FSMContext):
     """Сохраняет выбранное изображение и переходит к выбору шрифта."""
-    await safe_call_answer(call)
+    await safe_answer_callback(call, state)
+    if not call.data:
+        return
     idx = int(call.data.split('_')[-1])
     data = await state.get_data()
     filename = data['image_files'][idx]
@@ -254,12 +285,14 @@ async def select_image_cb(call: CallbackQuery, state: FSMContext):
 
     for msg_id in data.get('last_album_msgs', []):
         try:
-            await call.bot.delete_message(call.message.chat.id, msg_id)
+            if call.message and call.message.chat and call.bot:
+                await call.bot.delete_message(call.message.chat.id, msg_id)
         except TelegramBadRequest:
             pass
         if kb_id := data.get('last_keyboard_msg_id'):
             try:
-                await call.bot.delete_message(call.message.chat.id, kb_id)
+                if call.message and call.message.chat and call.bot:
+                    await call.bot.delete_message(call.message.chat.id, kb_id)
             except TelegramBadRequest:
                 pass
 
@@ -292,20 +325,22 @@ async def choose_font(call: CallbackQuery, state: FSMContext, edit=False):
     media = InputMediaPhoto(media=FSInputFile(font['sample_path']),
                             caption=f'✎ Подберите стиль шрифта — '
                                     f'пусть ваше послание зазвучит по-особенному')
-    if edit:
+    if edit and call.message and isinstance(call.message, Message):
         try:
             await call.message.edit_media(media=media, reply_markup=keyboard)
         except TelegramBadRequest:
-            await call.message.answer_photo(photo=FSInputFile(font['sample_path']),
-                                           caption=f'✎ Подберите стиль шрифта — '
-                                                    f'пусть ваше послание зазвучит по-особенному',
-                                           reply_markup=keyboard)
+            if call.message and isinstance(call.message, Message):
+                await call.message.answer_photo(photo=FSInputFile(font['sample_path']),
+                                               caption=f'✎ Подберите стиль шрифта — '
+                                                        f'пусть ваше послание зазвучит по-особенному',
+                                               reply_markup=keyboard)
     else:
-        await call.message.answer_photo(photo=FSInputFile(font['sample_path']),
-                                        caption=f'✎ Подберите стиль шрифта — '
-                                                f'пусть ваше послание зазвучит по-особенному',
-                                        reply_markup=keyboard)
-    await call.answer()
+        if call.message and isinstance(call.message, Message):
+            await call.message.answer_photo(photo=FSInputFile(font['sample_path']),
+                                            caption=f'✎ Подберите стиль шрифта — '
+                                                    f'пусть ваше послание зазвучит по-особенному',
+                                            reply_markup=keyboard)
+    await safe_answer_callback(call, state)
 
 
 @router.callback_query(F.data == 'prev_font')
@@ -331,6 +366,8 @@ async def next_font(call: CallbackQuery, state: FSMContext):
 @router.callback_query(F.data.startswith('select_font_'))
 async def select_font(call: CallbackQuery, state: FSMContext):
     """Сохраняет выбранный шрифт и переходит к выбору цвета"""
+    if not call.data:
+        return
     font_id = int(call.data.split('_')[-1])
     fonts = await list_fonts()
     selected = next((f for f in fonts if f['id'] == font_id), None)
@@ -338,16 +375,17 @@ async def select_font(call: CallbackQuery, state: FSMContext):
         await call.answer("❌ Шрифт не найден", show_alert=True)
         return
 
-    try:
-        await call.message.delete()
-    except TelegramBadRequest:
-        pass
+    if call.message and isinstance(call.message, Message):
+        try:
+            await call.message.delete()
+        except TelegramBadRequest:
+            pass
 
     await state.update_data(
         selected_font=selected['font_path'],
         selected_font_sample=selected['sample_path']
     )
-    await call.answer()
+    await safe_answer_callback(call, state)
 
     await update_summary(call, state)
     await choose_color(call, state)
@@ -378,10 +416,20 @@ async def choose_color(call: CallbackQuery, state: FSMContext, edit: bool = Fals
     media = InputMediaPhoto(media=FSInputFile(color['sample_path']),
                             caption="🎨 Выберите цвет — чтобы каждая деталь передавала нужное настроение")
 
-    if edit:
+    if edit and call.message and isinstance(call.message, Message):
         try:
             await safe_edit_media(call.message, media=media, reply_markup=keyboard)
         except TelegramBadRequest:
+            if call.message and isinstance(call.message, Message):
+                msg = await call.message.answer_photo(
+                    photo=FSInputFile(color['sample_path']),
+                    caption=media.caption,
+                    reply_markup=keyboard
+                )
+                await state.update_data(color_msg_id=msg.message_id)
+
+    else:
+        if call.message and isinstance(call.message, Message):
             msg = await call.message.answer_photo(
                 photo=FSInputFile(color['sample_path']),
                 caption=media.caption,
@@ -389,15 +437,7 @@ async def choose_color(call: CallbackQuery, state: FSMContext, edit: bool = Fals
             )
             await state.update_data(color_msg_id=msg.message_id)
 
-    else:
-        msg = await call.message.answer_photo(
-            photo=FSInputFile(color['sample_path']),
-            caption=media.caption,
-            reply_markup=keyboard
-        )
-        await state.update_data(color_msg_id=msg.message_id)
-
-    await call.answer()
+    await safe_answer_callback(call, state)
 
 
 @router.callback_query(F.data == 'prev_color')
@@ -423,6 +463,8 @@ async def next_color(call: CallbackQuery, state: FSMContext):
 @router.callback_query(F.data.startswith('select_color_'))
 async def select_color(call: CallbackQuery, state: FSMContext):
     """Сохраняет выбранный цвет и переходит к выбору позиции текста"""
+    if not call.data:
+        return
     color_id = int(call.data.split('_')[-1])
     colors = await list_colors()
     selected = next((c for c in colors if c['id'] == color_id), None)
@@ -430,16 +472,17 @@ async def select_color(call: CallbackQuery, state: FSMContext):
         await call.answer("❌ Цвет не найден", show_alert=True)
         return
     await state.update_data(
-        selected_color=selected['hex'],
+        selected_color=selected['hex_code'],
         selected_color_name=selected['name'],
         selected_color_sample=selected['sample_path']
     )
-    await call.answer()
+    await safe_answer_callback(call, state)
 
-    try:
-        await call.bot.delete_message(call.message.chat.id, call.message.message_id)
-    except TelegramBadRequest:
-        pass
+    if call.message and call.message.chat and call.bot:
+        try:
+            await call.bot.delete_message(call.message.chat.id, call.message.message_id)
+        except TelegramBadRequest:
+            pass
 
     await update_summary(call, state)
     await choose_position(call, state)
@@ -459,25 +502,33 @@ async def choose_position(call: CallbackQuery, state: FSMContext):
         [ InlineKeyboardButton(text='⏎ Назад', callback_data='go_back') ]
     ])
 
-    await call.message.answer(text='👇 Укажите, где разместить текст', reply_markup=kb)
+    if call.message:
+        await call.message.answer(text='👇 Укажите, где разместить текст', reply_markup=kb)
     await state.set_state(ImageMaker.choosing_position)
-    await call.answer()
+    await safe_answer_callback(call, state)
 
 
 @router.callback_query(F.data.startswith('position_'))
 async def select_position(call: CallbackQuery, state: FSMContext):
     """Сохраняет выбранную позицию текста и переводит пользователя к вводу текста"""
+    if not call.data:
+        return
     pos = call.data.split('_')[-1]
     await state.update_data(selected_text_position=pos)
-    try:
-        await call.bot.delete_message(call.message.chat.id, call.message.message_id)
-    except TelegramBadRequest:
-        pass
+    if call.message and call.message.chat and call.bot:
+        try:
+            await call.bot.delete_message(call.message.chat.id, call.message.message_id)
+        except TelegramBadRequest:
+            pass
     await update_summary(call, state)
-    prompt = await call.message.answer('📝 Напишите текст, используя кириллицу:')
-    await state.update_data(text_prompt_msg_id=prompt.message_id)
+    if call.message:
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text='⏎ Назад', callback_data='go_back')]
+        ])
+        prompt = await call.message.answer('📝 Напишите текст, используя кириллицу:', reply_markup=keyboard)
+        await state.update_data(text_prompt_msg_id=prompt.message_id)
     await state.set_state(ImageMaker.entering_text)
-    await call.answer()
+    await safe_answer_callback(call, state)
 
 
 # ——————————————————————
@@ -498,18 +549,22 @@ async def send_image_preview(message: Message, state: FSMContext, size_correctio
     data = await state.get_data()
     for msg_id in data.get('summary_msgs', []):
         try:
-            await message.bot.delete_message(message.chat.id, msg_id)
+            if message.bot:
+                await message.bot.delete_message(message.chat.id, msg_id)
         except TelegramBadRequest:
             pass
 
     indicator_text = '⚙️ Редактируем размер шрифта…' if is_resizing else '⚙️ Создаём открытку…'
     indicator = await message.answer(indicator_text)
 
-    if user_id is None:
+    if user_id is None and message.from_user:
         user_id = message.from_user.id
 
+    if user_id is None:
+        return
+
     src = os.path.join(data['image_folder'], data['selected_image'])
-    filename = f"final_{message.from_user.id}_{random.randint(1000000,99999999)}.png"
+    filename = f"final_{message.from_user.id if message.from_user else user_id}_{random.randint(1000000,99999999)}.png"
     final_path = os.path.join(config.Output_Folder, filename)
 
     if await is_subscribed(user_id):
@@ -538,7 +593,7 @@ async def send_image_preview(message: Message, state: FSMContext, size_correctio
     preview_path = os.path.join(config.Output_Folder, f"preview_{filename}")
     add_watermark(final_path, preview_path, watermark_text='Создано в Добрые Открыточки<3')
 
-    if not is_resizing:
+    if not is_resizing and message.from_user:
         url, pid = await create_payment(message.from_user.id, 100, 'Оплата за открытку')
         await state.update_data(payment_url=url, payment_id=pid)
 
@@ -567,7 +622,7 @@ async def send_image_preview(message: Message, state: FSMContext, size_correctio
 @router.callback_query(F.data == 'resize_minus')
 async def resize_minus(call: CallbackQuery, state: FSMContext):
     """Уменьшает размер шрифта и обновляет превью (шрифт не меньше минимального)."""
-    await call.answer()
+    await safe_answer_callback(call, state)
     data = await state.get_data()
 
     src = os.path.join(data['image_folder'], data['selected_image'])
@@ -587,25 +642,31 @@ async def resize_minus(call: CallbackQuery, state: FSMContext):
         return
 
     await state.update_data(size_correction=new_correction)
-    try:
-        await call.message.delete()
-    except TelegramBadRequest:
-        pass
-    await send_image_preview(call.message, state, size_correction=new_correction, is_resizing=True, user_id=call.from_user.id)
+    if call.message:
+        try:
+            if isinstance(call.message, Message):
+                await call.message.delete()
+        except TelegramBadRequest:
+            pass
+    if call.message and isinstance(call.message, Message):
+        await send_image_preview(call.message, state, size_correction=new_correction, is_resizing=True, user_id=call.from_user.id)
 
 
 @router.callback_query(F.data == 'resize_plus')
 async def resize_plus(call: CallbackQuery, state: FSMContext):
     """Увеличивает размер шрифта и обновляет превью."""
-    await call.answer()
+    await safe_answer_callback(call, state)
     data = await state.get_data()
     new_correction = data.get('size_correction', 0) + 1
     await state.update_data(size_correction=new_correction)
-    try:
-        await call.message.delete()
-    except TelegramBadRequest:
-        pass
-    await send_image_preview(call.message, state, size_correction=new_correction, is_resizing=True, user_id=call.from_user.id)
+    if call.message:
+        try:
+            if isinstance(call.message, Message):
+                await call.message.delete()
+        except TelegramBadRequest:
+            pass
+    if call.message and isinstance(call.message, Message):
+        await send_image_preview(call.message, state, size_correction=new_correction, is_resizing=True, user_id=call.from_user.id)
 
 
 # ——————————————————————
@@ -614,6 +675,8 @@ async def resize_plus(call: CallbackQuery, state: FSMContext):
 @router.callback_query(F.data.startswith('check_payment:'))
 async def check_payment_callback(call: CallbackQuery, state: FSMContext):
     """Проверяет статус оплаты и в том же сообщении вставляет финал без водяного знака"""
+    if not call.data:
+        return
     pid = call.data.split(':', 1)[1]
     user_id = call.from_user.id
 
@@ -622,7 +685,8 @@ async def check_payment_callback(call: CallbackQuery, state: FSMContext):
         data = await state.get_data()
         final_path = data.get('final_path') or data.get('preview_path')
         if not final_path:
-            await call.message.answer("❌ Не удалось найти файл открытки — попробуйте заново.")
+            if call.message:
+                await call.message.answer("❌ Не удалось найти файл открытки — попробуйте заново.")
             logger.error(f"Не найден final_path для пользователя {user_id} (payment_id={pid})")
             return
 
@@ -635,10 +699,11 @@ async def check_payment_callback(call: CallbackQuery, state: FSMContext):
         kb = InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text='🏠 Вернуться в главное меню', callback_data='main_menu')]
         ])
-        try:
-            await call.message.edit_media(media=media, reply_markup=kb)
-        except TelegramBadRequest:
-            pass
+        if call.message and isinstance(call.message, Message):
+            try:
+                await call.message.edit_media(media=media, reply_markup=kb)
+            except TelegramBadRequest:
+                pass
     else:
         logger.warning(
             f"Платёж {pid} пользователя {user_id} для поздравления не подтверждён (статус={status})"
@@ -653,13 +718,39 @@ async def check_payment_callback(call: CallbackQuery, state: FSMContext):
 async def go_back(call: CallbackQuery, state: FSMContext):
     """Возвращает пользователя к предыдущему шагу с удалением текущего сообщения и скрытием/обновлением summary."""
     # Удаляем текущее сообщение (картинку или интерфейс выбора)
-    try:
-        await call.message.delete()
-    except TelegramBadRequest:
-        pass
+    if call.message and isinstance(call.message, Message):
+        try:
+            await call.message.delete()
+        except TelegramBadRequest:
+            pass
 
     current = await state.get_state()
-    await safe_call_answer(call)
+    await safe_answer_callback(call, state)
+
+    # 0) От экрана превью картинки -> ввод текста (проверяем первым)
+    data = await state.get_data()
+    if data.get('user_text') and data.get('selected_text_position'):
+        # Убираем текст и возвращаемся к вводу
+        await state.update_data(user_text=None)
+        # Удаляем все summary сообщения
+        for msg_id in data.get('summary_msgs', []):
+            try:
+                if call.message and call.message.chat and call.bot:
+                    await call.bot.delete_message(call.message.chat.id, msg_id)
+            except Exception:
+                pass
+        await state.update_data(summary_msgs=[])
+        # Показываем summary с выбранными параметрами
+        await update_summary(call, state)
+        # Возвращаемся к вводу текста
+        if call.message and isinstance(call.message, Message):
+            keyboard = InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text='⏎ Назад', callback_data='go_back')]
+            ])
+            prompt = await call.message.answer('📝 Напишите текст, используя кириллицу:', reply_markup=keyboard)
+            await state.update_data(text_prompt_msg_id=prompt.message_id)
+        await state.set_state(ImageMaker.entering_text)
+        return
 
     # 1) От ввода текста -> выбор позиции
     if current == ImageMaker.entering_text.state:
@@ -674,7 +765,8 @@ async def go_back(call: CallbackQuery, state: FSMContext):
              InlineKeyboardButton(text='Снизу', callback_data='position_bottom')],
             [InlineKeyboardButton(text='⏎ Назад', callback_data='go_back')]
         ])
-        await call.message.answer('👇 Укажите, где разместить текст', reply_markup=kb)
+        if call.message and isinstance(call.message, Message):
+            await call.message.answer('👇 Укажите, где разместить текст', reply_markup=kb)
         await state.set_state(ImageMaker.choosing_position)
         return
 
@@ -712,7 +804,8 @@ async def go_back(call: CallbackQuery, state: FSMContext):
         data = await state.get_data()
         for msg_id in data.get('summary_msgs', []):
             try:
-                await call.bot.delete_message(call.message.chat.id, msg_id)
+                if call.message and call.message.chat and call.bot:
+                    await call.bot.delete_message(call.message.chat.id, msg_id)
             except Exception:
                 pass
         await state.update_data(summary_msgs=[])
@@ -721,32 +814,34 @@ async def go_back(call: CallbackQuery, state: FSMContext):
         await state.set_state(ImageMaker.choosing_image)
         return
 
-    # 5) От выбора изображения -> главное меню
+    # 5) От выбора изображения -> меню создания открытки
     if current == ImageMaker.choosing_image.state:
         # Удаляем альбом и клавиатуру пагинации
         data = await state.get_data()
         for msg_id in data.get('last_album_msgs', []):
             try:
-                await call.bot.delete_message(call.message.chat.id, msg_id)
+                if call.message and call.message.chat and call.bot:
+                    await call.bot.delete_message(call.message.chat.id, msg_id)
             except Exception:
                 pass
         if kb_id := data.get('last_keyboard_msg_id'):
             try:
-                await call.bot.delete_message(call.message.chat.id, kb_id)
+                if call.message and call.message.chat and call.bot:
+                    await call.bot.delete_message(call.message.chat.id, kb_id)
             except Exception:
                 pass
-        # Сброс состояния и возврат в главное меню
-        await state.clear()
+        # Возврат в меню создания открытки
         await create_card(call, state, force_new_message=True)
         return
 
     # Во всех остальных случаях – перезапуск процесса
     await state.clear()
-    try:
-        await call.message.delete()
-    except TelegramBadRequest:
-        pass
-    await call.message.answer(START_TEXT, reply_markup=get_main_menu_kb())
+    if call.message and isinstance(call.message, Message):
+        try:
+            await call.message.delete()
+        except TelegramBadRequest:
+            pass
+        await call.message.answer(START_TEXT, reply_markup=get_main_menu_kb())
     await state.clear()
 
 
@@ -754,15 +849,16 @@ async def go_back(call: CallbackQuery, state: FSMContext):
 async def main_menu(call: CallbackQuery, state: FSMContext):
     """Очищает состояние FSM и возвращает пользователя в главное меню, сохраняя данные оплаты."""
     await state.set_state(None)
-    try:
-        await call.message.edit_reply_markup(reply_markup=None)
-    except TelegramBadRequest:
-        pass
-    await call.message.answer(
-        START_TEXT,
-        reply_markup=get_main_menu_kb()
-    )
-    await call.answer()
+    if call.message and isinstance(call.message, Message):
+        try:
+            await call.message.edit_reply_markup(reply_markup=None)
+        except TelegramBadRequest:
+            pass
+        await call.message.answer(
+            START_TEXT,
+            reply_markup=get_main_menu_kb()
+        )
+    await safe_answer_callback(call, state)
 
 
 # ——————————————————————

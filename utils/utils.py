@@ -75,14 +75,15 @@ async def push_state(state: FSMContext, new_state: State):
 
 async def validate_text(message: Message, state: FSMContext) -> bool:
     """Обрабатывает и проверяет введенный текст пользователя."""
-    text = message.text.strip()
+    text = (message.text or "").strip()
     data = await state.get_data()
 
     if not is_russian(text):
         prompt_id = data.get('text_prompt_msg_id')
         if prompt_id:
             try:
-                await message.bot.delete_message(chat_id=message.chat.id, message_id=prompt_id)
+                if message.bot is not None:
+                    await message.bot.delete_message(chat_id=message.chat.id, message_id=prompt_id)
             except TelegramBadRequest:
                 logger.debug("Не удалось удалить сообщение-подсказку при ошибке ввода")
         try:
@@ -103,7 +104,8 @@ async def validate_text(message: Message, state: FSMContext) -> bool:
     prompt_id = data.get('text_prompt_msg_id')
     if prompt_id:
         try:
-            await message.bot.delete_message(chat_id=message.chat.id, message_id=prompt_id)
+            if message.bot is not None:
+                await message.bot.delete_message(chat_id=message.chat.id, message_id=prompt_id)
         except TelegramBadRequest:
             logger.debug("Не удалось удалить подсказку перед финальной генерацией")
     try:
@@ -124,3 +126,42 @@ async def safe_call_answer(call, *args, **kwargs):
         await call.answer(*args, **kwargs)
     except TelegramBadRequest:
         pass
+
+
+async def safe_answer_callback(call: types.CallbackQuery, state: FSMContext | None = None):
+    """Безопасно отвечает на callback query, обрабатывая устаревшие запросы"""
+    try:
+        await call.answer()
+    except TelegramBadRequest as e:
+        if "query is too old" in str(e) or "query ID is invalid" in str(e):
+            # Обрабатываем устаревшие callback query
+            if state:
+                await handle_stale_callback(call, state)
+            # Иначе просто игнорируем
+        else:
+            # Перебрасываем другие ошибки
+            raise
+
+
+async def handle_stale_callback(call: types.CallbackQuery, state: FSMContext):
+    """Обрабатывает устаревшие callback query, возвращая пользователя в актуальное состояние"""
+    try:
+        await safe_call_answer(call, "⚠️ Что-то пошло не так, возвращаем вас в актуальное состояние...")
+    except TelegramBadRequest:
+        # Если даже ответить не можем, просто игнорируем
+        pass
+    
+    # Определяем текущее состояние и возвращаем пользователя в актуальное место
+    current = await state.get_state()
+    data = await state.get_data()
+    
+    # Если есть данные о выбранных параметрах, возвращаем в меню создания открытки
+    if data.get('selected_image') or data.get('selected_font') or data.get('selected_color'):
+        # Импортируем здесь, чтобы избежать циклических импортов
+        from handlers.branches.generic_picture import create_card
+        await create_card(call, state, force_new_message=True)
+    else:
+        # Иначе возвращаем в главное меню
+        from handlers.core.start import START_TEXT, get_main_menu_kb
+        if call.message and isinstance(call.message, types.Message):
+            await call.message.answer(START_TEXT, reply_markup=get_main_menu_kb())

@@ -101,7 +101,7 @@ def add_watermark(input_image_path, output_image_path, watermark_text="Опла�
         x_c = int(image.width * frac)
         y_c = int(image.height * frac)
 
-        text_layer = Image.new("RGBA", (text_w, text_h), (0, 0, 0, 0))
+        text_layer = Image.new("RGBA", (int(text_w), int(text_h)), (0, 0, 0, 0))
         draw = ImageDraw.Draw(text_layer)
         draw.text((0, 0), watermark_text, font=font, fill=(255, 255, 255, alpha))
 
@@ -165,18 +165,23 @@ async def generate_font_sample(font_path: Path, sample_path: Path, size: int, te
     lines = textwrap.wrap(text, width=20)
     spacing = 10
 
-    ascent, descent = ft.getmetrics()
-    line_height = ascent + descent
-
-    total_h = line_height * len(lines) + spacing * (len(lines) - 1)
+    # ascent, descent = ft.getmetrics()
+    # line_height = ascent + descent
+    # Вместо getmetrics используем textbbox для определения высоты строки
+    line_heights = []
+    for line in lines:
+        bbox = draw.textbbox((0, 0), line, font=ft)
+        line_height = bbox[3] - bbox[1]
+        line_heights.append(line_height)
+    total_h = sum(line_heights) + spacing * (len(lines) - 1)
 
     y = (img_size - total_h) / 2
 
-    for line in lines:
+    for i, line in enumerate(lines):
         bbox = draw.textbbox((0, 0), line, font=ft)
         w = bbox[2] - bbox[0]
         x = (img_size - w) / 2
         draw.text((x, y), line, font=ft, fill='black')
-        y += line_height + spacing
+        y += line_heights[i] + spacing
 
     img.save(sample_path)
