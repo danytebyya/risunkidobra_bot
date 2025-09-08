@@ -47,19 +47,30 @@ async def start_callback(call: CallbackQuery, state: FSMContext):
     # Всегда показываем обычное главное меню, даже для админов
     # Админы могут использовать команду /admin для доступа к админ-панели
     
-    # Проверяем, есть ли сохраненные идеи для отображения без кнопок
+    # Для сюрприз-идей: убираем кнопки, но НЕ показываем главное меню автоматически
+    # Для обычных идей: показываем главное меню, но сохраняем сообщение с идеями
     current_ideas = data.get("current_ideas")
-    if current_ideas:
-        # Показываем идеи без кнопок и затем главное меню
+    is_surprise = data.get("is_surprise", False)
+    
+    if current_ideas and is_surprise:
+        # Для сюрприз-идей: убираем кнопки из сообщения с идеями и отправляем главное меню новым сообщением
         if isinstance(call.message, Message):
-            # Сначала удаляем текущее сообщение
+            # Убираем кнопки из текущего сообщения
             try:
-                await call.message.delete()
+                await call.message.edit_reply_markup(reply_markup=None)
             except Exception:
                 pass
-            # Отправляем идеи без кнопок
-            await call.message.answer(f"✨ Ваши идеи:\n\n{current_ideas}")
-            # Затем отправляем главное меню снизу
+            # Отправляем главное меню новым сообщением
+            await call.message.answer(START_TEXT, reply_markup=get_main_menu_kb())
+    elif current_ideas and not is_surprise:
+        # Для обычных идей: убираем кнопки из сообщения с идеями и отправляем главное меню новым сообщением
+        if isinstance(call.message, Message):
+            # Убираем кнопки из текущего сообщения
+            try:
+                await call.message.edit_reply_markup(reply_markup=None)
+            except Exception:
+                pass
+            # Отправляем главное меню новым сообщением
             await call.message.answer(START_TEXT, reply_markup=get_main_menu_kb())
     else:
         if isinstance(call.message, Message):

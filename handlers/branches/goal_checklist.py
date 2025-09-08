@@ -434,8 +434,7 @@ async def handle_custom_preferences(message: Message, state: FSMContext):
     keyboard = None
     
     loading_text = (
-        "✨ Создаю персональный чек-лист для твоей цели...\n\n"
-        "⏳ Это займёт некоторое время"
+        "✨ Создаю персональный чек-лист для твоей цели..."
     )
     
     # Получаем ID предыдущего сообщения бота
@@ -475,8 +474,7 @@ async def generate_checklist(callback_query: CallbackQuery, state: FSMContext, i
         keyboard = None
         
         loading_text = (
-            "✨ Создаю персональный чек-лист для твоей цели...\n\n"
-            "⏳ Это займёт несколько секунд"
+            "✨ Создаю персональный чек-лист для твоей цели..."
         )
         
         if is_from_message:

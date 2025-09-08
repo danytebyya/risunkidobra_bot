@@ -160,6 +160,9 @@ async def handle_stale_callback(call: types.CallbackQuery, state: FSMContext):
         # Импортируем здесь, чтобы избежать циклических импортов
         from handlers.branches.generic_picture import create_card
         await create_card(call, state, force_new_message=True)
+    elif data.get('is_surprise'):
+        # Для сюрприз-идей НЕ отправляем главное меню автоматически
+        pass
     else:
         # Иначе возвращаем в главное меню
         from handlers.core.start import START_TEXT, get_main_menu_kb

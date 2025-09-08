@@ -4,6 +4,7 @@ from aiogram.types import Message, CallbackQuery, InlineKeyboardButton, InlineKe
 from aiogram import Router
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
+from aiogram.exceptions import TelegramBadRequest
 
 from utils.database.db import upsert_subscription, fetch_subscription
 from utils.payments.payment_functional import create_payment, check_payment_status
@@ -161,7 +162,11 @@ async def show_subscription_info(message_or_call, subscription_type: str):
             if isinstance(message_or_call, Message):
                 await message_or_call.answer(text, reply_markup=get_back_to_menu_kb())
             else:
-                await message_or_call.message.edit_text(text, reply_markup=get_back_to_menu_kb())
+                try:
+                    await message_or_call.message.edit_text(text, reply_markup=get_back_to_menu_kb())
+                except TelegramBadRequest:
+                    # Игнорируем ошибку, если сообщение уже имеет тот же контент
+                    pass
             return
     
     # Если подписки нет, показываем меню покупки
@@ -183,7 +188,11 @@ async def show_subscription_info(message_or_call, subscription_type: str):
     if isinstance(message_or_call, Message):
         await message_or_call.answer(text, reply_markup=keyboard)
     else:
-        await message_or_call.message.edit_text(text, reply_markup=keyboard)
+        try:
+            await message_or_call.message.edit_text(text, reply_markup=keyboard)
+        except TelegramBadRequest:
+            # Игнорируем ошибку, если сообщение уже имеет тот же контент
+            pass
 
 
 @router.callback_query(F.data.startswith("buy:"))
@@ -265,7 +274,11 @@ async def process_payment_check(call: CallbackQuery, state: FSMContext, subscrip
         text = f"🎉 Оплата подтверждена!\n\nВаша подписка «{sub_data['name']}» активна до {formatted}."
         
         if isinstance(call.message, Message):
-            await call.message.edit_text(text, reply_markup=get_back_to_menu_kb())
+            try:
+                await call.message.edit_text(text, reply_markup=get_back_to_menu_kb())
+            except TelegramBadRequest:
+                # Игнорируем ошибку, если сообщение уже имеет тот же контент
+                pass
     else:
         logger.warning(f"Платёж {payment_id} пользователя {user_id} не подтверждён (статус={status})")
         await call.answer(
@@ -283,7 +296,11 @@ async def subscription_back_to_menu(call: CallbackQuery, state: FSMContext):
     
     text = "✨ Выберите подписку:"
     if isinstance(call.message, Message):
-        await call.message.edit_text(text, reply_markup=get_subscription_menu_kb())
+        try:
+            await call.message.edit_text(text, reply_markup=get_subscription_menu_kb())
+        except TelegramBadRequest:
+            # Игнорируем ошибку, если сообщение уже имеет тот же контент
+            pass
 
 
 @router.callback_query(F.data == "psychologist_back_to_menu")
@@ -313,7 +330,11 @@ async def back_to_main_edit(call: CallbackQuery, state: FSMContext):
             await call.message.edit_reply_markup(reply_markup=None)
         except Exception:
             pass
-        await call.message.edit_text(START_TEXT, reply_markup=get_main_menu_kb())
+        try:
+            await call.message.edit_text(START_TEXT, reply_markup=get_main_menu_kb())
+        except TelegramBadRequest:
+            # Игнорируем ошибку, если сообщение уже имеет тот же контент
+            pass
     await safe_answer_callback(call, state)
 
 

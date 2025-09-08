@@ -108,7 +108,7 @@ async def ideas_surprise(call: CallbackQuery, state: FSMContext):
         await call.answer(text="❌ Не удалось определить пользователя.", show_alert=True)
         return
 
-    # Проверяем подписку
+    # Проверяем подписку - сюрприз-идея доступна только подписчикам
     if not await is_subscribed(user_id):
         kb = InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="✨ Купить подписку", callback_data="subscription")],
@@ -140,10 +140,13 @@ async def ideas_surprise(call: CallbackQuery, state: FSMContext):
         await safe_answer_callback(call, state)
         return
 
-    # Генерируем сюрприз-идею
-    loading = None
+    # Показываем сообщение ожидания, редактируя предыдущее сообщение
     if call.message and call.bot is not None:
-        loading = await call.bot.send_message(chat_id=call.message.chat.id, text="🎲 Создаем сюрприз-идею...")
+        await call.bot.edit_message_text(
+            chat_id=call.message.chat.id,
+            message_id=call.message.message_id,
+            text="🎲 Создаем сюрприз-идею..."
+        )
 
     try:
         # Случайно выбираем категорию для сюрприз-идеи
@@ -179,24 +182,23 @@ async def ideas_surprise(call: CallbackQuery, state: FSMContext):
         await state.update_data(
             is_surprise=True,
             regeneration_count=0,
-            ideas_history=[formatted_ideas]
+            ideas_history=[formatted_ideas],
+            current_ideas=formatted_ideas  # Сохраняем идеи для обработки в главном меню
         )
 
+        # После генерации сюрприз-идеи показываем кнопку возврата в главное меню
         kb = InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="🏠 Вернуться в главное меню", callback_data="start")],
         ])
 
         if call.message and call.bot is not None:
-            # Редактируем стартовое сообщение, заменяя его на идеи
+            # Редактируем сообщение ожидания, заменяя его на идеи с кнопкой
             await call.bot.edit_message_text(
                 chat_id=call.message.chat.id,
                 message_id=call.message.message_id,
                 text=f"✨ Вот что мы придумали:\n\n{formatted_ideas}",
                 reply_markup=kb
             )
-            # Удаляем сообщение о загрузке
-            if loading:
-                await call.bot.delete_message(chat_id=call.message.chat.id, message_id=loading.message_id)
 
     except Exception as e:
         logger.error(f"Ошибка генерации сюрприз-идеи для {user_id}: {e}")
@@ -211,8 +213,6 @@ async def ideas_surprise(call: CallbackQuery, state: FSMContext):
                 message_id=call.message.message_id,
                 reply_markup=kb
             )
-            if loading:
-                await call.bot.delete_message(chat_id=call.message.chat.id, message_id=loading.message_id)
 
     await safe_answer_callback(call, state)
 
@@ -571,8 +571,7 @@ async def ideas_select_detail(call: CallbackQuery, state: FSMContext):
                     message_id=call.message.message_id,
                     reply_markup=kb
                 )
-                # Сохраняем ID сообщения с подсказкой для последующего удаления
-                await state.update_data(hint_message_id=call.message.message_id)
+                # Не сохраняем hint_message_id, так как будем обновлять это же сообщение
             await safe_answer_callback(call, state)
             return
         
@@ -609,8 +608,7 @@ async def ideas_select_detail(call: CallbackQuery, state: FSMContext):
                     message_id=call.message.message_id,
                     reply_markup=kb
                 )
-                # Сохраняем ID сообщения с подсказкой для последующего удаления
-                await state.update_data(hint_message_id=call.message.message_id)
+                # Не сохраняем hint_message_id, так как будем обновлять это же сообщение
             await safe_answer_callback(call, state)
             return
         
@@ -649,8 +647,7 @@ async def ideas_select_detail(call: CallbackQuery, state: FSMContext):
                     message_id=call.message.message_id,
                     reply_markup=kb
                 )
-                # Сохраняем ID сообщения с подсказкой для последующего удаления
-                await state.update_data(hint_message_id=call.message.message_id)
+                # Не сохраняем hint_message_id, так как будем обновлять это же сообщение
             await safe_answer_callback(call, state)
             return
         
@@ -689,8 +686,7 @@ async def ideas_select_detail(call: CallbackQuery, state: FSMContext):
                     message_id=call.message.message_id,
                     reply_markup=kb
                 )
-                # Сохраняем ID сообщения с подсказкой для последующего удаления
-                await state.update_data(hint_message_id=call.message.message_id)
+                # Не сохраняем hint_message_id, так как будем обновлять это же сообщение
             await safe_answer_callback(call, state)
             return
         
@@ -725,8 +721,7 @@ async def ideas_select_detail(call: CallbackQuery, state: FSMContext):
                     message_id=call.message.message_id,
                     reply_markup=kb
                 )
-                # Сохраняем ID сообщения с подсказкой для последующего удаления
-                await state.update_data(hint_message_id=call.message.message_id)
+                # Не сохраняем hint_message_id, так как будем обновлять это же сообщение
             await safe_answer_callback(call, state)
             return
         
@@ -761,8 +756,7 @@ async def ideas_select_detail(call: CallbackQuery, state: FSMContext):
                     message_id=call.message.message_id,
                     reply_markup=kb
                 )
-                # Сохраняем ID сообщения с подсказкой для последующего удаления
-                await state.update_data(hint_message_id=call.message.message_id)
+                # Не сохраняем hint_message_id, так как будем обновлять это же сообщение
             await safe_answer_callback(call, state)
             return
         
@@ -801,8 +795,7 @@ async def ideas_select_detail(call: CallbackQuery, state: FSMContext):
                     message_id=call.message.message_id,
                     reply_markup=kb
                 )
-                # Сохраняем ID сообщения с подсказкой для последующего удаления
-                await state.update_data(hint_message_id=call.message.message_id)
+                # Не сохраняем hint_message_id, так как будем обновлять это же сообщение
             await safe_answer_callback(call, state)
             return
         
@@ -839,8 +832,7 @@ async def ideas_select_detail(call: CallbackQuery, state: FSMContext):
                     message_id=call.message.message_id,
                     reply_markup=kb
                 )
-                # Сохраняем ID сообщения с подсказкой для последующего удаления
-                await state.update_data(hint_message_id=call.message.message_id)
+                # Не сохраняем hint_message_id, так как будем обновлять это же сообщение
             await safe_answer_callback(call, state)
             return
         
@@ -877,8 +869,7 @@ async def ideas_select_detail(call: CallbackQuery, state: FSMContext):
                     message_id=call.message.message_id,
                     reply_markup=kb
                 )
-                # Сохраняем ID сообщения с подсказкой для последующего удаления
-                await state.update_data(hint_message_id=call.message.message_id)
+                # Не сохраняем hint_message_id, так как будем обновлять это же сообщение
             await safe_answer_callback(call, state)
             return
         
@@ -917,8 +908,7 @@ async def ideas_select_detail(call: CallbackQuery, state: FSMContext):
                     message_id=call.message.message_id,
                     reply_markup=kb
                 )
-                # Сохраняем ID сообщения с подсказкой для последующего удаления
-                await state.update_data(hint_message_id=call.message.message_id)
+                # Не сохраняем hint_message_id, так как будем обновлять это же сообщение
             await safe_answer_callback(call, state)
             return
         
@@ -955,8 +945,7 @@ async def ideas_select_detail(call: CallbackQuery, state: FSMContext):
                     message_id=call.message.message_id,
                     reply_markup=kb
                 )
-                # Сохраняем ID сообщения с подсказкой для последующего удаления
-                await state.update_data(hint_message_id=call.message.message_id)
+                # Не сохраняем hint_message_id, так как будем обновлять это же сообщение
             await safe_answer_callback(call, state)
             return
         
@@ -993,8 +982,7 @@ async def ideas_select_detail(call: CallbackQuery, state: FSMContext):
                     message_id=call.message.message_id,
                     reply_markup=kb
                 )
-                # Сохраняем ID сообщения с подсказкой для последующего удаления
-                await state.update_data(hint_message_id=call.message.message_id)
+                # Не сохраняем hint_message_id, так как будем обновлять это же сообщение
             await safe_answer_callback(call, state)
             return
         
@@ -1116,43 +1104,40 @@ async def ideas_payment_step(call: CallbackQuery, state: FSMContext):
         await call.answer(text="❌ Не удалось определить пользователя.", show_alert=True)
         return
 
-    # Проверяем подписку
-    if await is_subscribed(user_id):
-        # Если есть подписка, сразу генерируем идеи
-        await generate_ideas_for_user(call, state)
+    # Индивидуальные идеи платные для всех пользователей
+
+    # Определяем правильный callback для кнопки "Назад" в зависимости от категории
+    data = await state.get_data()
+    category = data.get("category", "")
+    
+    if category == "gift":
+        back_callback = "gift_back_to_occasion"
+    elif category == "post":
+        back_callback = "post_back_to_audience"
+    elif category == "name":
+        back_callback = "name_back_to_audience"
+    elif category == "business":
+        back_callback = "business_back_to_scale"
     else:
-        # Определяем правильный callback для кнопки "Назад" в зависимости от категории
-        data = await state.get_data()
-        category = data.get("category", "")
-        
-        if category == "gift":
-            back_callback = "gift_back_to_occasion"
-        elif category == "post":
-            back_callback = "post_back_to_audience"
-        elif category == "name":
-            back_callback = "name_back_to_audience"
-        elif category == "business":
-            back_callback = "business_back_to_scale"
-        else:
-            # Для других случаев (например, при выборе ограничений)
-            back_callback = "ideas_constraints_back"
-        
-        # Создаем платеж
-        url, pid = await create_payment(user_id, 100, "Оплата за идеи")
-        
-        kb = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="💳 Оплатить 100₽", url=url)],
-            [InlineKeyboardButton(text="📬 Получить идеи", callback_data=f"check_ideas:{pid}")],
-            [InlineKeyboardButton(text="⏎ Назад", callback_data=back_callback)],
-        ])
-        
-        if call.message and hasattr(call.message, "message_id") and call.bot is not None:
-            await call.bot.edit_message_text(
-                text=PAYMENT_MESSAGE,
-                chat_id=call.message.chat.id,
-                message_id=call.message.message_id,
-                reply_markup=kb
-            )
+        # Для других случаев (например, при выборе ограничений)
+        back_callback = "ideas_constraints_back"
+    
+    # Создаем платеж
+    url, pid = await create_payment(user_id, 100, "Оплата за идеи")
+    
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="💳 Оплатить 100₽", url=url)],
+        [InlineKeyboardButton(text="📬 Получить идеи", callback_data=f"check_ideas:{pid}")],
+        [InlineKeyboardButton(text="⏎ Назад", callback_data=back_callback)],
+    ])
+    
+    if call.message and hasattr(call.message, "message_id") and call.bot is not None:
+        await call.bot.edit_message_text(
+            text=PAYMENT_MESSAGE,
+            chat_id=call.message.chat.id,
+            message_id=call.message.message_id,
+            reply_markup=kb
+        )
 
 
 async def ideas_payment_step_from_message(message: types.Message, state: FSMContext):
@@ -1162,40 +1147,37 @@ async def ideas_payment_step_from_message(message: types.Message, state: FSMCont
         await message.answer("❌ Не удалось определить пользователя. Попробуйте еще раз.")
         return
 
-    # Проверяем подписку
-    if await is_subscribed(user_id):
-        # Если есть подписка, сразу генерируем идеи
-        await generate_ideas_for_user_from_message(message, state)
+    # Индивидуальные идеи платные для всех пользователей
+
+    # Определяем правильный callback для кнопки "Назад" в зависимости от категории
+    data = await state.get_data()
+    category = data.get("category", "")
+    
+    if category == "gift":
+        back_callback = "gift_back_to_occasion"
+    elif category == "post":
+        back_callback = "post_back_to_audience"
+    elif category == "name":
+        back_callback = "name_back_to_audience"
+    elif category == "business":
+        back_callback = "business_back_to_scale"
     else:
-        # Определяем правильный callback для кнопки "Назад" в зависимости от категории
-        data = await state.get_data()
-        category = data.get("category", "")
-        
-        if category == "gift":
-            back_callback = "gift_back_to_occasion"
-        elif category == "post":
-            back_callback = "post_back_to_audience"
-        elif category == "name":
-            back_callback = "name_back_to_audience"
-        elif category == "business":
-            back_callback = "business_back_to_scale"
-        else:
-            # Для других случаев (например, при выборе ограничений)
-            back_callback = "ideas_constraints_back"
-        
-        # Создаем платеж
-        url, pid = await create_payment(user_id, 100, "Оплата за идеи")
-        
-        kb = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="💳 Оплатить 100₽", url=url)],
-            [InlineKeyboardButton(text="📬 Получить идеи", callback_data=f"check_ideas:{pid}")],
-            [InlineKeyboardButton(text="⏎ Назад", callback_data=back_callback)],
-        ])
-        
-        await message.answer(
-            text=PAYMENT_MESSAGE,
-            reply_markup=kb
-        )
+        # Для других случаев (например, при выборе ограничений)
+        back_callback = "ideas_constraints_back"
+    
+    # Создаем платеж
+    url, pid = await create_payment(user_id, 100, "Оплата за идеи")
+    
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="💳 Оплатить 100₽", url=url)],
+        [InlineKeyboardButton(text="📬 Получить идеи", callback_data=f"check_ideas:{pid}")],
+        [InlineKeyboardButton(text="⏎ Назад", callback_data=back_callback)],
+    ])
+    
+    await message.answer(
+        text=PAYMENT_MESSAGE,
+        reply_markup=kb
+    )
 
 
 # ——————————————————————
@@ -1960,25 +1942,8 @@ async def go_back_ideas(call: CallbackQuery, state: FSMContext):
         await ideas_start_process(call, state)
         return
 
+    # Если мы дошли до сюда, значит это неизвестное состояние - просто очищаем состояние
     await state.clear()
-    if call.message and hasattr(call.message, "chat") and hasattr(call.message, "message_id") and call.bot is not None:
-        # Сначала убираем кнопки из сообщения с идеями, сохраняя текст
-        try:
-            await call.bot.edit_message_reply_markup(
-                chat_id=call.message.chat.id,
-                message_id=call.message.message_id,
-                reply_markup=None
-            )
-        except TelegramBadRequest:
-            # Если не удалось убрать кнопки, игнорируем ошибку
-            pass
-        
-        # Потом отправляем новое сообщение с главным меню
-        await call.bot.send_message(
-            chat_id=call.message.chat.id,
-            text=START_TEXT,
-            reply_markup=get_main_menu_kb()
-        )
     await safe_answer_callback(call, state)
 
 
